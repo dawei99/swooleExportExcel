@@ -1,0 +1,12 @@
+{
+    "require": {
+        "phpoffice/phpspreadsheet": "^1.6",
+        "box/spout": "^2.7"
+    },
+    "repositories": {
+        "packagist": {
+            "type": "composer",
+            "url": "https://packagist.phpcomposer.com"
+        }
+    }
+}
