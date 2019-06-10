@@ -2,3 +2,4 @@
 log.txt
 vendor/
 xlsx/
+.DS_Store

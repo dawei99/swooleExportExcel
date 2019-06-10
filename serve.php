@@ -5,65 +5,43 @@
  * Date: 2019/2/17
  * Time: 4:21 PM
  */
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
-require './vendor/autoload.php';
 
-$func = function ($data) {
-    $dbms = 'mysql';     //数据库类型
-    $host = 'localhost'; //数据库主机名
-    $dbName = 'blog_db';    //使用的数据库
-    $user = 'root';      //数据库连接用户名
-    $pass = 'root';          //对应的密码
-    $dsn = "$dbms:host=$host;dbname=$dbName";
-    try {
-        $dbh = new PDO($dsn, $user, $pass);
-    } catch (Exception $e) {
-        echo '错误';
-    }
+
+require './do.php';
+
+$serv = new Swoole\WebSocket\Server("0.0.0.0", 9501);
+
+$serv->on('open', function (Swoole\WebSocket\Server $server, $request) {
+    echo "new connection fd{$request->fd}\n";
+});
+
+/**
+ * $data : ['table' => 'test_user']
+ */
+$serv->on('message', function (Swoole\WebSocket\Server $server, $frame) {
+    global $pdoObj;
+    echo "receive from {$frame->fd}:{$frame->data},opcode:{$frame->opcode},fin:{$frame->finish}\n";
+    $pData = $frame->data;
+    $server->push($frame->fd, "ok");
+    $dbh = $pdoObj();
     // 数据分页
-    $fetch = $dbh->query('select id from test_user limit 100000')->fetchAll();
+    $fetch = $dbh->query('select id from test_user')->fetchAll();
     $dataCount = sizeof($fetch) ?? 0;
     if(!$dataCount) return 0;
     $page = 1000;
-    $pageTotals = $dataCount % $page ? $dataCount / $page + 1 : $dataCount / $page;
-    // 多页同时进行
-    $headCode = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N'];
-    for($i=0;$i<$pageTotals;$i++){
-        //go(function() use($i, $dbh, $page) {
-            $spreadsheet = new Spreadsheet();
-            $sheet = $spreadsheet->getActiveSheet();
-            // 导出数据
-            $limit = ' limit ' . $i * $page . ',' . $page ;
-            $data = $dbh->query('select * from test_user ' . $limit)->fetchAll(PDO::FETCH_ASSOC);
-            if($data){
-                // 表头
-                array_unshift($data, ['用户ID','用户名']);
-                // 数据
-                foreach($data AS $key=>$val){
-                    $key += 1;
-                    $cell = 0; // 横行第几个单元格
-                    foreach($val AS $rowVal){
-                        $callCode = $headCode[$cell] . $key;
-                        $sheet->setCellValue($callCode, $rowVal);
-                        $cell++;
-                    }
-                }
-                $writer = new Xlsx($spreadsheet);
-                $writer->save('xlsx/hello_'.$i.'.xlsx');
-                $writer = null;
-                $data = null;
-                $sheet = null;
-            }
-            $spreadsheet = null;
-        //});
+    $pageTotals = $dataCount % $page ? $dataCount / $page + 1 : $dataCount / $page; //总页数(前端平分元素)
+    $pData = json_decode($pData,true);
+    for($i=0;$i<$pageTotals;$i++) {
+        $start = $i * $page;
+        $data = array_merge($pData, ['offset' => $start, 'limit' => $page, 'pageTotals' => $pageTotals]);
+        $server->task($data);
     }
-    // 关闭连接
     $dbh = null;
+});
 
-};
-
-$serv = new swoole_server('127.0.0.1', 9526, SWOOLE_BASE);
+$serv->on('close', function ($ser, $fd) {
+    echo "client {$fd} closed\n";
+});
 
 $serv->set(array(
     'worker_num' => 1,
@@ -75,24 +53,22 @@ $serv->on('Start', function ($server) {
     echo '服务已开启' . PHP_EOL;
 });
 
-$serv->on('Receive', function (swoole_server $serv, $fd, $from_id, $data) {
-    $serv->send($fd, 'ok');
-    echo '接收数据，数据长度：' . strlen($data) . PHP_EOL;
-    $serv->task($data);
-    $serv->task($data);
-});
-
-$serv->on('Task', function (swoole_server $serv, $task_id, $from_id, $data) use ($func) {
-//$serv->on('Task', function (swoole_server $serv, Swoole\Server\Task $task) use ($func) {
-    //$data = $task->data;
+$serv->on('Task', function (swoole_server $serv, $task_id,$src_worker_id, $data) use ($taskWork) {
+    global $pdoObj;
     echo "Task($task_id)进程开始工作" . PHP_EOL;
-    $func($data);
-    //$task->finish($data);
+    $taskWork($data);
     $serv->finish($data);
 });
 
-$serv->on('Finish', function (swoole_server $serv, $task_id, $data) {
-    echo 'task任务处理完成' . PHP_EOL;
+$serv->on('Finish', function (swoole_server $server, $task_id, $data) {
+    global $serv;
+    foreach ($serv->connections as $fd) {
+        // 判断是否是websocket连接
+        if ($serv->isEstablished($fd)) {
+            $server->push($fd, json_encode($data));
+        }
+    }
+    echo 'task'.$task_id.'任务处理完成' . PHP_EOL;
 });
 
 $serv->start();
